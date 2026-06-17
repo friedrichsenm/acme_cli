@@ -6,8 +6,11 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/go-acme/lego/v5/acme"
+	"github.com/go-acme/lego/v5/certcrypto"
+	"github.com/go-acme/lego/v5/certificate"
 	"github.com/go-acme/lego/v5/challenge"
 	"github.com/go-acme/lego/v5/lego"
 	"github.com/go-acme/lego/v5/providers/dns/route53"
@@ -27,6 +30,7 @@ type Account struct {
 	Registration *acme.ExtendedAccount `json:"registration"`
 	Key          *rsa.PrivateKey       `json:"key"`
 
+	store  Store
 	client *lego.Client
 }
 
@@ -42,17 +46,21 @@ func (a *Account) GetPrivateKey() crypto.Signer {
 	return a.Key
 }
 
-type AccountStore interface {
-	Load(meta AccountMetadata) (*Account, error)
-	Save(*Account) error
+type Store interface {
+	LoadAccount(meta AccountMetadata) (*Account, error)
+	SaveAccount(*Account) error
+	LoadCert(domain string) (*Certificate, error)
+	SaveCert(cert *Certificate) error
 }
 
 var (
-	ErrAccountDoesNotExist = errors.New("account does not exist")
+	ErrAccountDoesNotExist     = errors.New("account does not exist")
+	ErrAccountUninitialized    = errors.New("account has not been initialized")
+	ErrCertificateDoesNotExist = errors.New("certificate does not exist")
 )
 
-func GetAccount(meta AccountMetadata, store AccountStore) (*Account, error) {
-	account, err := store.Load(meta)
+func GetAccount(meta AccountMetadata, store Store) (*Account, error) {
+	account, err := store.LoadAccount(meta)
 	if errors.Is(err, ErrAccountDoesNotExist) {
 		return newAccount(meta, store)
 	}
@@ -68,11 +76,12 @@ func GetAccount(meta AccountMetadata, store AccountStore) (*Account, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying registration: %w", err)
 	}
+	account.store = store
 
 	return account, nil
 }
 
-func newAccount(meta AccountMetadata, store AccountStore) (*Account, error) {
+func newAccount(meta AccountMetadata, store Store) (*Account, error) {
 	privateKey, err := rsa.GenerateKey(nil, 4096)
 	if err != nil {
 		return nil, err
@@ -95,7 +104,7 @@ func newAccount(meta AccountMetadata, store AccountStore) (*Account, error) {
 		return nil, fmt.Errorf("failed to register account: %w", err)
 	}
 	account.Registration = reg
-	err = store.Save(account)
+	err = store.SaveAccount(account)
 	if err != nil {
 		return nil, fmt.Errorf("failed to save account: %w", err)
 	}
@@ -128,4 +137,55 @@ func (a *Account) initClient() error {
 
 	a.client = client
 	return nil
+}
+
+type Certificate struct {
+	Domain      string `json:"domain"`
+	PrivateKey  []byte `json:"private_key"`
+	Certificate []byte `json:"certificate"`
+}
+
+func (a *Account) Request(ctx context.Context, domain string) (*Certificate, error) {
+	if a.client == nil {
+		return nil, ErrAccountUninitialized
+	}
+
+	cert, err := a.store.LoadCert(domain)
+	if err == nil {
+		return cert, nil
+	}
+	if !errors.Is(err, ErrCertificateDoesNotExist) {
+		return nil, err
+	}
+
+	resource, err := a.client.Certificate.Obtain(ctx, certificate.ObtainRequest{
+		Domains: []string{domain, fmt.Sprintf("*.%s", domain)},
+		KeyType: certcrypto.RSA4096,
+		Bundle:  true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("obtaining certificate for domain %s: %w", domain, err)
+	}
+
+	err = a.store.SaveAccount(a)
+	if err != nil {
+		log.Printf("failed to save account: %v", err)
+	}
+
+	cert = &Certificate{
+		Domain:      domain,
+		PrivateKey:  resource.PrivateKey,
+		Certificate: resource.Certificate,
+	}
+
+	err = a.store.SaveCert(cert)
+	if err != nil {
+		return nil, fmt.Errorf("saving certificate for domain %s: %w", domain, err)
+	}
+
+	return &Certificate{
+		Domain:      domain,
+		PrivateKey:  resource.PrivateKey,
+		Certificate: resource.Certificate,
+	}, nil
 }

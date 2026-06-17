@@ -34,7 +34,7 @@ func NewFileStore(directory string) (*FileStore, error) {
 	return &FileStore{directory: directory}, nil
 }
 
-func (f FileStore) Load(meta client.AccountMetadata) (*client.Account, error) {
+func (f FileStore) LoadAccount(meta client.AccountMetadata) (*client.Account, error) {
 	filename := getFilename(meta)
 	path := filepath.Join(f.directory, filename)
 	accountData, err := os.ReadFile(path)
@@ -65,7 +65,7 @@ func (f FileStore) Load(meta client.AccountMetadata) (*client.Account, error) {
 	return &account, nil
 }
 
-func (f FileStore) Save(account *client.Account) error {
+func (f FileStore) SaveAccount(account *client.Account) error {
 	accountData, err := json.Marshal(account)
 	if err != nil {
 		return fmt.Errorf("failed to marshal account: %w", err)
@@ -73,6 +73,46 @@ func (f FileStore) Save(account *client.Account) error {
 	filename := getFilename(account.AccountMetadata)
 	path := filepath.Join(f.directory, filename)
 	err = os.WriteFile(path, accountData, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	return nil
+}
+
+func (f FileStore) LoadCert(domain string) (*client.Certificate, error) {
+	path := filepath.Join(f.directory, fmt.Sprintf("%s.json", domain))
+	certData, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, client.ErrCertificateDoesNotExist
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	var cert client.Certificate
+	if err = json.Unmarshal(certData, &cert); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal account: %w", err)
+	}
+
+	if cert.Domain != domain {
+		return nil, errors.New("cert does not match domain")
+	}
+
+	if cert.PrivateKey == nil || cert.Certificate == nil {
+		return nil, errors.New("cert does not have a private key or certificate")
+	}
+
+	return &cert, nil
+}
+
+func (f FileStore) SaveCert(cert *client.Certificate) error {
+	certData, err := json.Marshal(cert)
+	if err != nil {
+		return fmt.Errorf("failed to marshal certificate: %w", err)
+	}
+
+	path := filepath.Join(f.directory, fmt.Sprintf("%s.json", cert.Domain))
+	err = os.WriteFile(path, certData, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
