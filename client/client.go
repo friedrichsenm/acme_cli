@@ -141,8 +141,8 @@ func (a *Account) initClient() error {
 
 type Certificate struct {
 	Domain      string `json:"domain"`
-	PrivateKey  []byte `json:"private_key"`
-	Certificate []byte `json:"certificate"`
+	PrivateKey  string `json:"private_key"`
+	Certificate string `json:"certificate"`
 }
 
 func (a *Account) Request(ctx context.Context, domain string) (*Certificate, error) {
@@ -174,8 +174,8 @@ func (a *Account) Request(ctx context.Context, domain string) (*Certificate, err
 
 	cert = &Certificate{
 		Domain:      domain,
-		PrivateKey:  resource.PrivateKey,
-		Certificate: resource.Certificate,
+		PrivateKey:  string(resource.PrivateKey),
+		Certificate: string(resource.Certificate),
 	}
 
 	err = a.store.SaveCert(cert)
@@ -183,9 +183,5 @@ func (a *Account) Request(ctx context.Context, domain string) (*Certificate, err
 		return nil, fmt.Errorf("saving certificate for domain %s: %w", domain, err)
 	}
 
-	return &Certificate{
-		Domain:      domain,
-		PrivateKey:  resource.PrivateKey,
-		Certificate: resource.Certificate,
-	}, nil
+	return cert, nil
 }
